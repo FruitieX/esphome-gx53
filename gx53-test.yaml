@@ -1,5 +1,8 @@
+substitutions:
+  node_name: gx53-test
+
 esphome:
-  name: gx53-test
+  name: ${node_name}
   friendly_name: GX53 Test
 
 bk72xx:
@@ -28,13 +31,28 @@ ota:
   - platform: esphome
   - platform: web_server
 
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [gx53_mixer]
+
 mqtt:
   broker: mqtt.fruitiex.org
-  topic_prefix: esphome/gx53-test
+  topic_prefix: esphome/${node_name}
   discovery: true
 
   # Don't waste network/CPU sending debug logs over MQTT.
   log_topic: null
+
+  # Replaces ESPHome's built-in MQTT light command parser so we can add
+  # transition_ms while keeping the normal ESPHome JSON light command format.
+  on_json_message:
+    - topic: "esphome/${node_name}/light/light/command"
+      then:
+        - lambda: |-
+            esphome::gx53_mixer::handle_mqtt_light_command(
+                *id(gx53_light), x);
 
 # BP5768 in this lamp is compatible with ESPHome's BP5758D driver.
 bp5758d:
@@ -42,53 +60,59 @@ bp5758d:
   clock_pin: P26
 
 output:
-  # OpenBeken map 2,1,0 -> ESPHome physical channels 3,2,1
   - platform: bp5758d
-    id: led_red
+    id: hw_red
     channel: 3
     current: 4
 
   - platform: bp5758d
-    id: led_green
+    id: hw_green
     channel: 2
     current: 4
 
   - platform: bp5758d
-    id: led_blue
+    id: hw_blue
     channel: 1
     current: 4
 
-  # Our experimentally verified C/W mapping
   - platform: bp5758d
-    id: led_cold_white
+    id: hw_cold_white
     channel: 5
     current: 6
 
   - platform: bp5758d
-    id: led_warm_white
+    id: hw_warm_white
     channel: 4
     current: 6
 
 light:
-  - platform: rgbww
+  - platform: gx53_mixer
     id: gx53_light
     name: Light
 
-    red: led_red
-    green: led_green
-    blue: led_blue
-    cold_white: led_cold_white
-    warm_white: led_warm_white
+    red: hw_red
+    green: hw_green
+    blue: hw_blue
+    cold_white: hw_cold_white
+    warm_white: hw_warm_white
 
     cold_white_color_temperature: 6500 K
     warm_white_color_temperature: 2700 K
 
-    # Important safety/thermal settings:
-    color_interlock: true
-    constant_brightness: true
+    rgb_white_color_temperature: 4000 K
+    white_extraction: 100%
 
-    # First boot should never unexpectedly light the LEDs.
+    current_budget_ma: 12
+    red_current_ma: 4
+    green_current_ma: 4
+    blue_current_ma: 4
+    cold_white_current_ma: 6
+    warm_white_current_ma: 6
+
+    default_transition_length: 250ms
     restore_mode: ALWAYS_OFF
+
+    command_topic: null
 
 sensor:
   - platform: internal_temperature
