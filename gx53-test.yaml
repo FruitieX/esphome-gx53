@@ -1,0 +1,142 @@
+esphome:
+  name: gx53-test
+  friendly_name: GX53 Test
+
+bk72xx:
+  board: generic-bk7231n-qfn32-tuya
+
+wifi:
+  ssid: "***REMOVED_WIFI_SSID***"
+  password: "***REMOVED_WIFI_PASSWORD***"
+
+  # Safety net in case normal Wi-Fi doesn't work.
+  ap:
+    ssid: "GX53 Test Fallback"
+    password: "***REMOVED_FALLBACK_AP_PASSWORD***"
+
+captive_portal:
+
+logger:
+  baud_rate: 0
+
+web_server:
+  port: 80
+  version: 3
+  local: true
+
+ota:
+  - platform: esphome
+  - platform: web_server
+
+mqtt:
+  broker: mqtt.fruitiex.org
+  topic_prefix: esphome/gx53-test
+  discovery: true
+
+  # Don't waste network/CPU sending debug logs over MQTT.
+  log_topic: null
+
+# BP5768 in this lamp is compatible with ESPHome's BP5758D driver.
+bp5758d:
+  data_pin: P24
+  clock_pin: P26
+
+output:
+  # OpenBeken map 2,1,0 -> ESPHome physical channels 3,2,1
+  - platform: bp5758d
+    id: led_red
+    channel: 3
+    current: 4
+
+  - platform: bp5758d
+    id: led_green
+    channel: 2
+    current: 4
+
+  - platform: bp5758d
+    id: led_blue
+    channel: 1
+    current: 4
+
+  # Our experimentally verified C/W mapping
+  - platform: bp5758d
+    id: led_cold_white
+    channel: 5
+    current: 6
+
+  - platform: bp5758d
+    id: led_warm_white
+    channel: 4
+    current: 6
+
+light:
+  - platform: rgbww
+    id: gx53_light
+    name: Light
+
+    red: led_red
+    green: led_green
+    blue: led_blue
+    cold_white: led_cold_white
+    warm_white: led_warm_white
+
+    cold_white_color_temperature: 6500 K
+    warm_white_color_temperature: 2700 K
+
+    # Important safety/thermal settings:
+    color_interlock: true
+    constant_brightness: true
+
+    # First boot should never unexpectedly light the LEDs.
+    restore_mode: ALWAYS_OFF
+
+sensor:
+  - platform: internal_temperature
+    id: chip_temperature
+    name: "Chip Temperature"
+    update_interval: 10s
+    entity_category: diagnostic
+
+    # Belt-and-suspenders thermal protection.
+    on_value:
+      then:
+        - if:
+            condition:
+              lambda: 'return id(chip_temperature).state >= 80.0;'
+            then:
+              - light.turn_off: gx53_light
+              - logger.log:
+                  level: WARN
+                  format: "Thermal shutdown: BK7231N temperature >= 80 C"
+
+  - platform: wifi_signal
+    id: wifi_rssi
+    name: "WiFi Signal"
+    update_interval: 30s
+    entity_category: diagnostic
+
+text_sensor:
+  - platform: uptime
+    name: "Uptime"
+    update_interval: 60s
+    entity_category: diagnostic
+
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+      entity_category: diagnostic
+    ssid:
+      name: "WiFi SSID"
+      entity_category: diagnostic
+    bssid:
+      name: "WiFi BSSID"
+      entity_category: diagnostic
+
+button:
+  - platform: restart
+    name: "Restart"
+    entity_category: diagnostic
+
+  - platform: safe_mode
+    name: "Restart in Safe Mode"
+    entity_category: diagnostic
