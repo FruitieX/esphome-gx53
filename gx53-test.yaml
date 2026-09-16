@@ -134,6 +134,25 @@ sensor:
     update_interval: 30s
     entity_category: diagnostic
 
+  - platform: debug
+    free:
+      name: "Heap Free"
+    block:
+      name: "Heap Max Block"
+    min_free:
+      name: "Heap Min Free"
+    #fragmentation:
+      #name: "Heap Fragmentation"
+    loop_time:
+      name: "Loop Time"
+    #psram:
+      #name: "Free PSRAM"
+    cpu_frequency:
+      name: "CPU Frequency"
+
+debug:
+  update_interval: 5s
+
 text_sensor:
   - platform: uptime
     name: "Uptime"
@@ -149,6 +168,13 @@ text_sensor:
       entity_category: diagnostic
     bssid:
       name: "WiFi BSSID"
+      entity_category: diagnostic
+
+  - platform: debug
+    device:
+      name: "Device Info"
+    reset_reason:
+      name: "Reset Reason"
       entity_category: diagnostic
 
 button:
