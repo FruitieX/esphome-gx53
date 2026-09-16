@@ -16,7 +16,9 @@ wifi:
 
   # Safety net in case normal Wi-Fi doesn't work.
   ap:
-    ssid: "${friendly_name} Fallback"
+    # Keep this short enough for Wi-Fi's 32-byte SSID limit even when the
+    # friendly name is long.
+    ssid: "${node_name}-fb"
     password: !secret fallback_ap_password
 
 captive_portal:
@@ -46,15 +48,6 @@ mqtt:
 
   # Don't waste network/CPU sending debug logs over MQTT.
   log_topic: null
-
-  # Replaces ESPHome's built-in MQTT light command parser so we can add
-  # transition_ms while keeping the normal ESPHome JSON light command format.
-  on_json_message:
-    - topic: "esphome/${node_name}/light/light/command"
-      then:
-        - lambda: |-
-            esphome::gx53_mixer::handle_mqtt_light_command(
-                *id(gx53_light), x);
 
 # BP5768 in this lamp is compatible with ESPHome's BP5758D driver.
 bp5758d:
@@ -115,7 +108,6 @@ light:
     default_transition_length: 250ms
     restore_mode: ALWAYS_OFF
 
-    command_topic: null
 
 sensor:
   - platform: internal_temperature

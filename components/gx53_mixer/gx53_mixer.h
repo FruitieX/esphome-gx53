@@ -1,19 +1,23 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 
 #include "esphome/components/json/json_util.h"
 #include "esphome/components/light/light_json_schema.h"
 #include "esphome/components/light/light_output.h"
 #include "esphome/components/light/light_transformer.h"
+#include "esphome/components/mqtt/mqtt_client.h"
 #include "esphome/components/output/float_output.h"
+#include "esphome/core/component.h"
 #include "gx53_mixer_math.h"
 
 namespace esphome::gx53_mixer {
 
 class GX53MixerTransition;
+void handle_mqtt_light_command(light::LightState& state, JsonObjectConst input);
 
-class GX53MixerLightOutput final : public light::LightOutput {
+class GX53MixerLightOutput final : public Component, public light::LightOutput {
  public:
   void set_red(output::FloatOutput* red) { this->red_ = red; }
   void set_green(output::FloatOutput* green) { this->green_ = green; }
@@ -46,6 +50,14 @@ class GX53MixerLightOutput final : public light::LightOutput {
   }
 
   void setup_state(light::LightState* state) override { this->state_ = state; }
+
+  // Run just after ESPHome's stock MQTT light component. The stock component
+  // remains active for state publishing and discovery, but its command
+  // subscription is replaced with the parser below so transition_ms has one
+  // authoritative command path.
+  float get_setup_priority() const override { return setup_priority::AFTER_CONNECTION - 1.0f; }
+  void setup() override;
+  void loop() override;
 
   std::unique_ptr<light::LightTransformer> create_default_transition() override;
 
@@ -152,6 +164,8 @@ class GX53MixerLightOutput final : public light::LightOutput {
 
   light::LightState* state_{nullptr};
   math::ChannelLevels last_output_{};
+  std::string mqtt_command_topic_{};
+  bool mqtt_command_intercepted_{false};
 };
 
 class GX53MixerTransition final : public light::LightTransformer {
@@ -242,6 +256,33 @@ inline void handle_mqtt_light_command(light::LightState& state, JsonObjectConst 
   }
 
   call.perform();
+}
+
+inline void GX53MixerLightOutput::setup() {
+  if (this->state_ == nullptr || mqtt::global_mqtt_client == nullptr) return;
+
+  this->mqtt_command_topic_ = mqtt::global_mqtt_client->get_topic_prefix();
+  this->mqtt_command_topic_ += "/light/";
+  std::array<char, OBJECT_ID_MAX_LEN> object_id_buf{};
+  const auto object_id = this->state_->get_object_id_to(object_id_buf);
+  this->mqtt_command_topic_.append(object_id.c_str(), object_id.size());
+  this->mqtt_command_topic_ += "/command";
+}
+
+inline void GX53MixerLightOutput::loop() {
+  if (this->mqtt_command_intercepted_ || this->mqtt_command_topic_.empty() || mqtt::global_mqtt_client == nullptr ||
+      !mqtt::global_mqtt_client->is_connected())
+    return;
+
+  // MQTTJSONLightComponent subscribed during its setup at the immediately
+  // higher priority. Wait until MQTT is connected before touching the backend:
+  // unsubscribe() is not safe during the client's asynchronous startup on
+  // BK7231N. The callback list survives later reconnects.
+  mqtt::global_mqtt_client->unsubscribe(this->mqtt_command_topic_);
+  mqtt::global_mqtt_client->subscribe_json(
+      this->mqtt_command_topic_,
+      [this](const std::string&, JsonObject root) { handle_mqtt_light_command(*this->state_, root); });
+  this->mqtt_command_intercepted_ = true;
 }
 
 }  // namespace esphome::gx53_mixer

@@ -13,6 +13,8 @@ from esphome.const import (
 )
 from esphome.types import ConfigType
 
+DEPENDENCIES = ["mqtt"]
+
 CONF_RGB_WHITE_COLOR_TEMPERATURE = "rgb_white_color_temperature"
 CONF_WHITE_EXTRACTION = "white_extraction"
 CONF_MINIMUM_BRIGHTNESS = "minimum_brightness"
@@ -24,7 +26,9 @@ CONF_COLD_WHITE_CURRENT_MA = "cold_white_current_ma"
 CONF_WARM_WHITE_CURRENT_MA = "warm_white_current_ma"
 
 gx53_mixer_ns = cg.esphome_ns.namespace("gx53_mixer")
-GX53MixerLightOutput = gx53_mixer_ns.class_("GX53MixerLightOutput", light.LightOutput)
+GX53MixerLightOutput = gx53_mixer_ns.class_(
+    "GX53MixerLightOutput", cg.Component, light.LightOutput
+)
 
 
 def _validate_mixer(config):
@@ -64,7 +68,7 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_COLD_WHITE_CURRENT_MA, default=12.0): cv.positive_float,
             cv.Optional(CONF_WARM_WHITE_CURRENT_MA, default=12.0): cv.positive_float,
         }
-    ),
+    ).extend(cv.COMPONENT_SCHEMA),
     light.validate_color_temperature_channels,
     _validate_mixer,
 )
@@ -72,6 +76,7 @@ CONFIG_SCHEMA = cv.All(
 
 async def to_code(config: ConfigType) -> None:
     var = cg.new_Pvariable(config[CONF_OUTPUT_ID])
+    await cg.register_component(var, config)
     await light.register_light(var, config)
 
     red = await cg.get_variable(config[CONF_RED])
