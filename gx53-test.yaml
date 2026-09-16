@@ -1,21 +1,23 @@
 substitutions:
+  # Override these per bulb with ESPHome's `-s` command-line option.
   node_name: gx53-test
+  friendly_name: GX53 Test
 
 esphome:
   name: ${node_name}
-  friendly_name: GX53 Test
+  friendly_name: ${friendly_name}
 
 bk72xx:
   board: generic-bk7231n-qfn32-tuya
 
 wifi:
-  ssid: "***REMOVED_WIFI_SSID***"
-  password: "***REMOVED_WIFI_PASSWORD***"
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
 
   # Safety net in case normal Wi-Fi doesn't work.
   ap:
-    ssid: "GX53 Test Fallback"
-    password: "***REMOVED_FALLBACK_AP_PASSWORD***"
+    ssid: "${friendly_name} Fallback"
+    password: !secret fallback_ap_password
 
 captive_portal:
 
@@ -101,6 +103,7 @@ light:
 
     rgb_white_color_temperature: 4000 K
     white_extraction: 100%
+    minimum_brightness: 13%
 
     current_budget_ma: 12
     red_current_ma: 4

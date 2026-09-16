@@ -15,6 +15,7 @@ from esphome.types import ConfigType
 
 CONF_RGB_WHITE_COLOR_TEMPERATURE = "rgb_white_color_temperature"
 CONF_WHITE_EXTRACTION = "white_extraction"
+CONF_MINIMUM_BRIGHTNESS = "minimum_brightness"
 CONF_CURRENT_BUDGET_MA = "current_budget_ma"
 CONF_RED_CURRENT_MA = "red_current_ma"
 CONF_GREEN_CURRENT_MA = "green_current_ma"
@@ -55,6 +56,7 @@ CONFIG_SCHEMA = cv.All(
             cv.Required(CONF_WARM_WHITE_COLOR_TEMPERATURE): cv.color_temperature,
             cv.Required(CONF_RGB_WHITE_COLOR_TEMPERATURE): cv.color_temperature,
             cv.Optional(CONF_WHITE_EXTRACTION, default="100%"): cv.percentage,
+            cv.Optional(CONF_MINIMUM_BRIGHTNESS, default="0%"): cv.percentage,
             cv.Optional(CONF_CURRENT_BUDGET_MA, default=12.0): cv.positive_float,
             cv.Optional(CONF_RED_CURRENT_MA, default=12.0): cv.positive_float,
             cv.Optional(CONF_GREEN_CURRENT_MA, default=12.0): cv.positive_float,
@@ -88,6 +90,7 @@ async def to_code(config: ConfigType) -> None:
     cg.add(var.set_warm_white_temperature(config[CONF_WARM_WHITE_COLOR_TEMPERATURE]))
     cg.add(var.set_rgb_white_temperature(config[CONF_RGB_WHITE_COLOR_TEMPERATURE]))
     cg.add(var.set_white_extraction(config[CONF_WHITE_EXTRACTION]))
+    cg.add(var.set_minimum_brightness(config[CONF_MINIMUM_BRIGHTNESS]))
 
     cg.add(var.set_current_budget_ma(config[CONF_CURRENT_BUDGET_MA]))
     cg.add(var.set_red_current_ma(config[CONF_RED_CURRENT_MA]))

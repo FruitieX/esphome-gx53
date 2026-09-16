@@ -5,22 +5,27 @@
 #include "esphome/components/json/json_util.h"
 #include "esphome/components/light/light_json_schema.h"
 #include "esphome/components/light/light_output.h"
+#include "esphome/components/light/light_transformer.h"
 #include "esphome/components/output/float_output.h"
+#include "gx53_mixer_math.h"
 
 namespace esphome::gx53_mixer {
 
+class GX53MixerTransition;
+
 class GX53MixerLightOutput final : public light::LightOutput {
  public:
-  void set_red(output::FloatOutput *red) { this->red_ = red; }
-  void set_green(output::FloatOutput *green) { this->green_ = green; }
-  void set_blue(output::FloatOutput *blue) { this->blue_ = blue; }
-  void set_cold_white(output::FloatOutput *cold_white) { this->cold_white_ = cold_white; }
-  void set_warm_white(output::FloatOutput *warm_white) { this->warm_white_ = warm_white; }
+  void set_red(output::FloatOutput* red) { this->red_ = red; }
+  void set_green(output::FloatOutput* green) { this->green_ = green; }
+  void set_blue(output::FloatOutput* blue) { this->blue_ = blue; }
+  void set_cold_white(output::FloatOutput* cold_white) { this->cold_white_ = cold_white; }
+  void set_warm_white(output::FloatOutput* warm_white) { this->warm_white_ = warm_white; }
 
   void set_cold_white_temperature(float value) { this->cold_white_temperature_ = value; }
   void set_warm_white_temperature(float value) { this->warm_white_temperature_ = value; }
   void set_rgb_white_temperature(float value) { this->rgb_white_temperature_ = value; }
   void set_white_extraction(float value) { this->white_extraction_ = value; }
+  void set_minimum_brightness(float value) { this->minimum_brightness_ = value; }
 
   void set_current_budget_ma(float value) { this->current_budget_ma_ = value; }
   void set_red_current_ma(float value) { this->red_current_ma_ = value; }
@@ -40,96 +45,103 @@ class GX53MixerLightOutput final : public light::LightOutput {
     return traits;
   }
 
-  void write_state(light::LightState *state) override {
-    float red = 0.0f;
-    float green = 0.0f;
-    float blue = 0.0f;
-    float cold_white = 0.0f;
-    float warm_white = 0.0f;
+  void setup_state(light::LightState* state) override { this->state_ = state; }
 
-    const auto mode = state->current_values.get_color_mode();
+  std::unique_ptr<light::LightTransformer> create_default_transition() override;
 
-    if (mode == light::ColorMode::RGB) {
-      // Includes on/off, master brightness, color brightness, transitions and
-      // ESPHome's normal light-value processing.
-      state->current_values_as_rgb(&red, &green, &blue);
-
-      // Extract the neutral/common RGB component and render it with the white
-      // LEDs instead. Saturated colors therefore remain RGB, while desaturated
-      // colors progressively use more CW/WW.
-      //
-      // Examples with white_extraction == 1:
-      //   (1.0, 1.0, 1.0) -> RGB (0, 0, 0) + white 1.0
-      //   (1.0, 0.7, 0.7) -> RGB (0.3, 0, 0) + white 0.7
-      //   (1.0, 0.0, 0.0) -> RGB unchanged
-      const float common = std::min({red, green, blue}) * this->white_extraction_;
-      red -= common;
-      green -= common;
-      blue -= common;
-
-      this->mix_white_(this->rgb_white_temperature_, common, &cold_white, &warm_white);
-    } else if (mode == light::ColorMode::COLD_WARM_WHITE) {
-      // Let ESPHome calculate the requested CW/WW ratio from color temperature.
-      // constant_brightness is deliberately false here: our global limiter below
-      // is the final authority on aggregate output/current.
-      state->current_values_as_cwww(&cold_white, &warm_white, false);
-    }
-
-    // Approximate aggregate-current limiter. The configured *_current_ma values
-    // MUST match the corresponding BP5758D output `current:` values.
-    const float requested_ma =
-        red * this->red_current_ma_ +
-        green * this->green_current_ma_ +
-        blue * this->blue_current_ma_ +
-        cold_white * this->cold_white_current_ma_ +
-        warm_white * this->warm_white_current_ma_;
-
-    if (requested_ma > this->current_budget_ma_ && requested_ma > 0.0f) {
-      const float scale = this->current_budget_ma_ / requested_ma;
-      red *= scale;
-      green *= scale;
-      blue *= scale;
-      cold_white *= scale;
-      warm_white *= scale;
-    }
-
-    this->red_->set_level(this->clamp01_(red));
-    this->green_->set_level(this->clamp01_(green));
-    this->blue_->set_level(this->clamp01_(blue));
-    this->cold_white_->set_level(this->clamp01_(cold_white));
-    this->warm_white_->set_level(this->clamp01_(warm_white));
+  void write_state(light::LightState* state) override {
+    this->write_channels_(this->mix_values_(state->current_values));
   }
 
  protected:
-  static float clamp01_(float value) { return std::max(0.0f, std::min(1.0f, value)); }
+  friend class GX53MixerTransition;
 
-  void mix_white_(float mireds, float level, float *cold_white, float *warm_white) const {
-    const float span = this->warm_white_temperature_ - this->cold_white_temperature_;
-    if (span <= 0.0f || level <= 0.0f) {
-      *cold_white = 0.0f;
-      *warm_white = 0.0f;
-      return;
-    }
-
-    // Mireds increase as the requested white gets warmer.
-    const float warm_fraction =
-        clamp01_((mireds - this->cold_white_temperature_) / span);
-
-    *cold_white = level * (1.0f - warm_fraction);
-    *warm_white = level * warm_fraction;
+  float gamma_correct_(float value) const {
+    return this->state_ == nullptr ? math::clamp01(value) : this->state_->gamma_correct_lut(math::clamp01(value));
   }
 
-  output::FloatOutput *red_{nullptr};
-  output::FloatOutput *green_{nullptr};
-  output::FloatOutput *blue_{nullptr};
-  output::FloatOutput *cold_white_{nullptr};
-  output::FloatOutput *warm_white_{nullptr};
+  math::ChannelLevels mix_values_(const light::LightColorValues& values) const {
+    math::ChannelLevels levels;
+    const float logical_master = values.get_state() * values.get_brightness();
+    const float effective_logical_master = math::remap_brightness(logical_master, this->minimum_brightness_);
+    if (effective_logical_master <= 0.0f) return levels;
+    const float corrected_master = this->gamma_correct_(effective_logical_master);
+
+    const auto mode = values.get_color_mode();
+    if (mode == light::ColorMode::RGB) {
+      // Keep the master brightness separate from color. Besides making the
+      // floor common to all channels, this avoids low-end gamma-LUT
+      // quantization changing RGB ratios before the floor is applied.
+      const float color_brightness = values.get_color_brightness();
+      levels.red = this->gamma_correct_(color_brightness * values.get_red());
+      levels.green = this->gamma_correct_(color_brightness * values.get_green());
+      levels.blue = this->gamma_correct_(color_brightness * values.get_blue());
+
+      // Extract the neutral/common RGB component and render it with the white
+      // LEDs instead. Saturated colors remain RGB; desaturated colors
+      // progressively use more CW/WW.
+      const float common = std::min({levels.red, levels.green, levels.blue}) * this->white_extraction_;
+      levels.red -= common;
+      levels.green -= common;
+      levels.blue -= common;
+
+      const auto white = math::white_channels(this->rgb_white_temperature_, common, this->cold_white_temperature_,
+                                              this->warm_white_temperature_);
+      levels.cold_white = white.cold_white;
+      levels.warm_white = white.warm_white;
+      math::scale(levels, corrected_master);
+    } else if (mode == light::ColorMode::COLD_WARM_WHITE) {
+      // Derive both white channels from the requested color temperature and
+      // one common master level. CW+WW therefore sums to the same level at
+      // every point, including while color temperature is being interpolated.
+      levels = math::white_channels(values.get_color_temperature(), corrected_master, this->cold_white_temperature_,
+                                    this->warm_white_temperature_);
+    }
+
+    return levels;
+  }
+
+  math::ChannelCurrents currents_() const {
+    return {this->red_current_ma_, this->green_current_ma_, this->blue_current_ma_, this->cold_white_current_ma_,
+            this->warm_white_current_ma_};
+  }
+
+  math::ChannelLevels limited_(math::ChannelLevels levels) const {
+    math::apply_current_limit(levels, this->currents_(), this->current_budget_ma_);
+    return levels;
+  }
+
+  void write_channels_(math::ChannelLevels levels) {
+    // This is intentionally the final calculation. It covers normal writes and
+    // every custom-transition frame, so no intermediate vector can exceed the
+    // configured aggregate current budget.
+    levels = this->limited_(levels);
+    levels.red = math::clamp01(levels.red);
+    levels.green = math::clamp01(levels.green);
+    levels.blue = math::clamp01(levels.blue);
+    levels.cold_white = math::clamp01(levels.cold_white);
+    levels.warm_white = math::clamp01(levels.warm_white);
+    this->last_output_ = levels;
+
+    this->red_->set_level(levels.red);
+    this->green_->set_level(levels.green);
+    this->blue_->set_level(levels.blue);
+    this->cold_white_->set_level(levels.cold_white);
+    this->warm_white_->set_level(levels.warm_white);
+  }
+
+  output::FloatOutput* red_{nullptr};
+  output::FloatOutput* green_{nullptr};
+  output::FloatOutput* blue_{nullptr};
+  output::FloatOutput* cold_white_{nullptr};
+  output::FloatOutput* warm_white_{nullptr};
 
   // ESPHome stores color temperatures in mireds internally.
   float cold_white_temperature_{153.846f};  // 6500 K
   float warm_white_temperature_{370.370f};  // 2700 K
   float rgb_white_temperature_{250.0f};     // 4000 K
   float white_extraction_{1.0f};
+  float minimum_brightness_{0.0f};
 
   float current_budget_ma_{12.0f};
   float red_current_ma_{12.0f};
@@ -137,7 +149,69 @@ class GX53MixerLightOutput final : public light::LightOutput {
   float blue_current_ma_{12.0f};
   float cold_white_current_ma_{12.0f};
   float warm_white_current_ma_{12.0f};
+
+  light::LightState* state_{nullptr};
+  math::ChannelLevels last_output_{};
 };
+
+class GX53MixerTransition final : public light::LightTransformer {
+ public:
+  explicit GX53MixerTransition(GX53MixerLightOutput& output) : output_(output) {}
+
+  void start() override {
+    this->logical_start_ = this->start_values_;
+    this->logical_end_ = this->target_values_;
+
+    // Match ESPHome's useful on/off behavior: use the target color while
+    // turning on and the source color while turning off. Only brightness goes
+    // to zero; unlike ESPHome's default color-mode transition, an RGB<->CCT
+    // change never routes through an artificial OFF midpoint.
+    if (!this->start_values_.is_on() && this->target_values_.is_on()) {
+      this->logical_start_ = this->target_values_;
+      this->logical_start_.set_brightness(0.0f);
+    } else if (this->start_values_.is_on() && !this->target_values_.is_on()) {
+      this->logical_end_ = this->start_values_;
+      this->logical_end_.set_brightness(0.0f);
+    }
+
+    this->start_channels_ = this->output_.last_output_;
+    this->end_channels_ = this->output_.mix_values_(this->logical_end_);
+
+    // For an uninterrupted CCT transition, interpolate color temperature and
+    // master brightness, then derive CW/WW on each frame. If a previous direct
+    // transition was interrupted, start from the actual physical vector to
+    // avoid a jump caused by LightState current_values being stale during a
+    // transformer that writes directly to hardware.
+    const auto expected_start = this->output_.limited_(this->output_.mix_values_(this->logical_start_));
+    this->parametric_cct_ = this->start_values_.is_on() && this->target_values_.is_on() &&
+                            this->logical_start_.get_color_mode() == light::ColorMode::COLD_WARM_WHITE &&
+                            this->logical_end_.get_color_mode() == light::ColorMode::COLD_WARM_WHITE &&
+                            math::nearly_equal(this->start_channels_, expected_start);
+  }
+
+  optional<light::LightColorValues> apply() override {
+    const float progress = light::LightTransformer::smoothed_progress(this->get_progress_());
+    if (this->parametric_cct_) {
+      const auto values = light::LightColorValues::lerp(this->logical_start_, this->logical_end_, progress);
+      this->output_.write_channels_(this->output_.mix_values_(values));
+    } else {
+      this->output_.write_channels_(math::lerp(this->start_channels_, this->end_channels_, progress));
+    }
+    return {};
+  }
+
+ protected:
+  GX53MixerLightOutput& output_;
+  light::LightColorValues logical_start_{};
+  light::LightColorValues logical_end_{};
+  math::ChannelLevels start_channels_{};
+  math::ChannelLevels end_channels_{};
+  bool parametric_cct_{false};
+};
+
+inline std::unique_ptr<light::LightTransformer> GX53MixerLightOutput::create_default_transition() {
+  return make_unique<GX53MixerTransition>(*this);
+}
 
 // Parse a normal ESPHome MQTT light command using ESPHome's own JSON schema,
 // then add one extension:
@@ -147,15 +221,14 @@ class GX53MixerLightOutput final : public light::LightOutput {
 // LightCall::set_transition_length() takes milliseconds, so this preserves
 // exact sub-second transitions. If both `transition` and `transition_ms` are
 // present, transition_ms wins because it is applied after the standard parser.
-inline void handle_mqtt_light_command(light::LightState &state, JsonObjectConst input) {
+inline void handle_mqtt_light_command(light::LightState& state, JsonObjectConst input) {
   // LightJSONSchema::parse_json() currently expects a mutable JsonObject while
   // mqtt.on_json_message supplies a const object. Make a small mutable copy.
   JsonDocument doc;
   doc.set(input);
 
   JsonObject root = doc.as<JsonObject>();
-  if (root.isNull())
-    return;
+  if (root.isNull()) return;
 
   auto call = state.make_call();
 
