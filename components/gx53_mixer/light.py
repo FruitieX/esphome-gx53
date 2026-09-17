@@ -1,5 +1,5 @@
 import esphome.codegen as cg
-from esphome.components import light, output
+from esphome.components import binary_sensor, light, output, sensor
 import esphome.config_validation as cv
 from esphome.const import (
     CONF_BLUE,
@@ -10,10 +10,13 @@ from esphome.const import (
     CONF_RED,
     CONF_WARM_WHITE,
     CONF_WARM_WHITE_COLOR_TEMPERATURE,
+    DEVICE_CLASS_SAFETY,
+    ENTITY_CATEGORY_DIAGNOSTIC,
 )
 from esphome.types import ConfigType
 
-DEPENDENCIES = ["mqtt"]
+DEPENDENCIES = ["mqtt", "sensor"]
+AUTO_LOAD = ["binary_sensor"]
 
 CONF_RGB_WHITE_COLOR_TEMPERATURE = "rgb_white_color_temperature"
 CONF_WHITE_EXTRACTION = "white_extraction"
@@ -24,6 +27,11 @@ CONF_GREEN_CURRENT_MA = "green_current_ma"
 CONF_BLUE_CURRENT_MA = "blue_current_ma"
 CONF_COLD_WHITE_CURRENT_MA = "cold_white_current_ma"
 CONF_WARM_WHITE_CURRENT_MA = "warm_white_current_ma"
+CONF_TEMPERATURE_SENSOR = "temperature_sensor"
+CONF_THERMAL_SHUTDOWN_TEMPERATURE = "thermal_shutdown_temperature"
+CONF_THERMAL_RESET_TEMPERATURE = "thermal_reset_temperature"
+CONF_THERMAL_COOLDOWN = "thermal_cooldown"
+CONF_THERMAL_LOCKOUT = "thermal_lockout"
 
 gx53_mixer_ns = cg.esphome_ns.namespace("gx53_mixer")
 GX53MixerLightOutput = gx53_mixer_ns.class_(
@@ -42,6 +50,15 @@ def _validate_mixer(config):
             "rgb_white_color_temperature must be between the native cold-white "
             "and warm-white color temperatures",
             path=[CONF_RGB_WHITE_COLOR_TEMPERATURE],
+        )
+
+    shutdown = config[CONF_THERMAL_SHUTDOWN_TEMPERATURE]
+    reset = config[CONF_THERMAL_RESET_TEMPERATURE]
+    if reset >= shutdown:
+        raise cv.Invalid(
+            "thermal_reset_temperature must be lower than "
+            "thermal_shutdown_temperature",
+            path=[CONF_THERMAL_RESET_TEMPERATURE],
         )
 
     return config
@@ -67,6 +84,20 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_BLUE_CURRENT_MA, default=12.0): cv.positive_float,
             cv.Optional(CONF_COLD_WHITE_CURRENT_MA, default=12.0): cv.positive_float,
             cv.Optional(CONF_WARM_WHITE_CURRENT_MA, default=12.0): cv.positive_float,
+            cv.Required(CONF_TEMPERATURE_SENSOR): cv.use_id(sensor.Sensor),
+            cv.Optional(
+                CONF_THERMAL_SHUTDOWN_TEMPERATURE, default="80 °C"
+            ): cv.temperature,
+            cv.Optional(
+                CONF_THERMAL_RESET_TEMPERATURE, default="70 °C"
+            ): cv.temperature,
+            cv.Optional(
+                CONF_THERMAL_COOLDOWN, default="60s"
+            ): cv.positive_time_period_milliseconds,
+            cv.Optional(CONF_THERMAL_LOCKOUT): binary_sensor.binary_sensor_schema(
+                device_class=DEVICE_CLASS_SAFETY,
+                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+            ),
         }
     ).extend(cv.COMPONENT_SCHEMA),
     light.validate_color_temperature_channels,
@@ -103,3 +134,25 @@ async def to_code(config: ConfigType) -> None:
     cg.add(var.set_blue_current_ma(config[CONF_BLUE_CURRENT_MA]))
     cg.add(var.set_cold_white_current_ma(config[CONF_COLD_WHITE_CURRENT_MA]))
     cg.add(var.set_warm_white_current_ma(config[CONF_WARM_WHITE_CURRENT_MA]))
+
+    temperature_sensor = await cg.get_variable(config[CONF_TEMPERATURE_SENSOR])
+    cg.add(var.set_temperature_sensor(temperature_sensor))
+    cg.add(
+        var.set_thermal_shutdown_temperature(
+            config[CONF_THERMAL_SHUTDOWN_TEMPERATURE]
+        )
+    )
+    cg.add(
+        var.set_thermal_reset_temperature(config[CONF_THERMAL_RESET_TEMPERATURE])
+    )
+    cg.add(
+        var.set_thermal_cooldown_ms(
+            config[CONF_THERMAL_COOLDOWN].total_milliseconds
+        )
+    )
+
+    if CONF_THERMAL_LOCKOUT in config:
+        thermal_lockout = await binary_sensor.new_binary_sensor(
+            config[CONF_THERMAL_LOCKOUT]
+        )
+        cg.add(var.set_thermal_lockout_sensor(thermal_lockout))

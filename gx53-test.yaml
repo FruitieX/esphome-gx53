@@ -105,6 +105,16 @@ light:
     cold_white_current_ma: 6
     warm_white_current_ma: 6
 
+    # The output starts locked until the first safe temperature reading. A
+    # thermal trip stays locked for at least one minute and until the chip has
+    # cooled to 70 C; ON commands are rejected throughout the lockout.
+    temperature_sensor: chip_temperature
+    thermal_shutdown_temperature: 80 °C
+    thermal_reset_temperature: 70 °C
+    thermal_cooldown: 60s
+    thermal_lockout:
+      name: "Thermal Lockout"
+
     default_transition_length: 250ms
     restore_mode: ALWAYS_OFF
 
@@ -116,42 +126,30 @@ sensor:
     update_interval: 10s
     entity_category: diagnostic
 
-    # Belt-and-suspenders thermal protection.
-    on_value:
-      then:
-        - if:
-            condition:
-              lambda: 'return id(chip_temperature).state >= 80.0;'
-            then:
-              - light.turn_off: gx53_light
-              - logger.log:
-                  level: WARN
-                  format: "Thermal shutdown: BK7231N temperature >= 80 C"
-
   - platform: wifi_signal
     id: wifi_rssi
     name: "WiFi Signal"
     update_interval: 30s
     entity_category: diagnostic
 
-  - platform: debug
-    free:
-      name: "Heap Free"
-    block:
-      name: "Heap Max Block"
-    min_free:
-      name: "Heap Min Free"
+  #- platform: debug
+    #free:
+      #name: "Heap Free"
+    #block:
+      #name: "Heap Max Block"
+    #min_free:
+      #name: "Heap Min Free"
     #fragmentation:
       #name: "Heap Fragmentation"
-    loop_time:
-      name: "Loop Time"
+    #loop_time:
+      #name: "Loop Time"
     #psram:
       #name: "Free PSRAM"
-    cpu_frequency:
-      name: "CPU Frequency"
+    #cpu_frequency:
+      #name: "CPU Frequency"
 
 debug:
-  update_interval: 5s
+  update_interval: 10s
 
 text_sensor:
   - platform: uptime

@@ -35,3 +35,10 @@ Use `--no-logs` when provisioning several bulbs and a log tail is not needed:
 The BP5758D `current` values and the mixer's corresponding `*_current_ma`
 values must always match. The current configuration uses 4 mA for each RGB
 channel, 6 mA for each white channel, and a 12 mA aggregate mixer budget.
+
+The mixer also owns the chip-temperature interlock. It starts with the output
+locked until a safe temperature reading is available, shuts down at 80 °C,
+and rejects turn-on commands for at least 60 seconds. It rearms only after the
+chip has cooled to 70 °C or below, then republishes the OFF state so a controller
+can retry its desired state safely. The diagnostic `Thermal Lockout` binary
+sensor reports whether commands are currently inhibited.

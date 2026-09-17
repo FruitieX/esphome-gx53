@@ -2,20 +2,27 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 
+#include "esphome/components/binary_sensor/binary_sensor.h"
 #include "esphome/components/json/json_util.h"
 #include "esphome/components/light/light_json_schema.h"
 #include "esphome/components/light/light_output.h"
 #include "esphome/components/light/light_transformer.h"
 #include "esphome/components/mqtt/mqtt_client.h"
 #include "esphome/components/output/float_output.h"
+#include "esphome/components/sensor/sensor.h"
 #include "esphome/core/component.h"
+#include "esphome/core/helpers.h"
+#include "esphome/core/log.h"
 #include "gx53_mixer_math.h"
+#include "thermal_interlock.h"
 
 namespace esphome::gx53_mixer {
 
+static const char *const TAG = "gx53_mixer";
+
 class GX53MixerTransition;
-void handle_mqtt_light_command(light::LightState& state, JsonObjectConst input);
 
 class GX53MixerLightOutput final : public Component, public light::LightOutput {
  public:
@@ -37,6 +44,12 @@ class GX53MixerLightOutput final : public Component, public light::LightOutput {
   void set_blue_current_ma(float value) { this->blue_current_ma_ = value; }
   void set_cold_white_current_ma(float value) { this->cold_white_current_ma_ = value; }
   void set_warm_white_current_ma(float value) { this->warm_white_current_ma_ = value; }
+
+  void set_temperature_sensor(sensor::Sensor* value) { this->temperature_sensor_ = value; }
+  void set_thermal_shutdown_temperature(float value) { this->thermal_interlock_.set_shutdown_temperature(value); }
+  void set_thermal_reset_temperature(float value) { this->thermal_interlock_.set_reset_temperature(value); }
+  void set_thermal_cooldown_ms(uint32_t value) { this->thermal_interlock_.set_cooldown_ms(value); }
+  void set_thermal_lockout_sensor(binary_sensor::BinarySensor* value) { this->thermal_lockout_sensor_ = value; }
 
   light::LightTraits get_traits() override {
     auto traits = light::LightTraits();
@@ -62,11 +75,21 @@ class GX53MixerLightOutput final : public Component, public light::LightOutput {
   std::unique_ptr<light::LightTransformer> create_default_transition() override;
 
   void write_state(light::LightState* state) override {
+    if (this->thermal_interlock_.is_locked()) {
+      this->write_channels_({});
+      return;
+    }
     this->write_channels_(this->mix_values_(state->current_values));
   }
 
  protected:
   friend class GX53MixerTransition;
+
+  void handle_mqtt_light_command_(JsonObjectConst input);
+  bool mqtt_command_requests_on_(JsonObjectConst input) const;
+  bool force_off_();
+  void handle_temperature_(float temperature);
+  void apply_thermal_update_(ThermalInterlockUpdate update);
 
   float gamma_correct_(float value) const {
     return this->state_ == nullptr ? math::clamp01(value) : this->state_->gamma_correct_lut(math::clamp01(value));
@@ -124,6 +147,11 @@ class GX53MixerLightOutput final : public Component, public light::LightOutput {
   }
 
   void write_channels_(math::ChannelLevels levels) {
+    // Transitions write channel vectors directly, bypassing write_state().
+    // Clamp here as the final safety boundary so no control path can energize
+    // an LED while the thermal interlock is active.
+    if (this->thermal_interlock_.is_locked()) levels = {};
+
     // This is intentionally the final calculation. It covers normal writes and
     // every custom-transition frame, so no intermediate vector can exceed the
     // configured aggregate current budget.
@@ -166,6 +194,12 @@ class GX53MixerLightOutput final : public Component, public light::LightOutput {
   math::ChannelLevels last_output_{};
   std::string mqtt_command_topic_{};
   bool mqtt_command_intercepted_{false};
+
+  sensor::Sensor* temperature_sensor_{nullptr};
+  binary_sensor::BinarySensor* thermal_lockout_sensor_{nullptr};
+  ThermalInterlock thermal_interlock_{};
+  float last_temperature_{NAN};
+  bool has_temperature_sample_{false};
 };
 
 class GX53MixerTransition final : public light::LightTransformer {
@@ -228,14 +262,20 @@ inline std::unique_ptr<light::LightTransformer> GX53MixerLightOutput::create_def
 }
 
 // Parse a normal ESPHome MQTT light command using ESPHome's own JSON schema,
-// then add one extension:
+// enforce the thermal interlock, then add one extension:
 //
 //   "transition_ms": 250
 //
 // LightCall::set_transition_length() takes milliseconds, so this preserves
 // exact sub-second transitions. If both `transition` and `transition_ms` are
 // present, transition_ms wins because it is applied after the standard parser.
-inline void handle_mqtt_light_command(light::LightState& state, JsonObjectConst input) {
+inline void GX53MixerLightOutput::handle_mqtt_light_command_(JsonObjectConst input) {
+  if (this->state_ == nullptr) return;
+  if (this->thermal_interlock_.is_locked() && this->mqtt_command_requests_on_(input)) {
+    ESP_LOGW(TAG, "Rejected MQTT turn-on command while thermal lockout is active");
+    return;
+  }
+
   // LightJSONSchema::parse_json() currently expects a mutable JsonObject while
   // mqtt.on_json_message supplies a const object. Make a small mutable copy.
   JsonDocument doc;
@@ -244,11 +284,11 @@ inline void handle_mqtt_light_command(light::LightState& state, JsonObjectConst 
   JsonObject root = doc.as<JsonObject>();
   if (root.isNull()) return;
 
-  auto call = state.make_call();
+  auto call = this->state_->make_call();
 
   // Standard ESPHome fields: state, brightness, color, color_temp, flash,
   // effect and whole-second `transition`.
-  light::LightJSONSchema::parse_json(state, call, root);
+  light::LightJSONSchema::parse_json(*this->state_, call, root);
 
   // Custom exact-millisecond transition extension.
   if (input["transition_ms"].is<uint32_t>()) {
@@ -258,8 +298,79 @@ inline void handle_mqtt_light_command(light::LightState& state, JsonObjectConst 
   call.perform();
 }
 
+inline bool GX53MixerLightOutput::mqtt_command_requests_on_(JsonObjectConst input) const {
+  if (!input[ESPHOME_F("state")].is<const char*>()) return false;
+
+  switch (parse_on_off(input[ESPHOME_F("state")].as<const char*>())) {
+    case PARSE_ON:
+      return true;
+    case PARSE_TOGGLE:
+      return this->state_ == nullptr || !this->state_->remote_values.is_on();
+    case PARSE_OFF:
+    case PARSE_NONE:
+      return false;
+  }
+  return false;
+}
+
+inline bool GX53MixerLightOutput::force_off_() {
+  if (this->state_ == nullptr || !this->state_->remote_values.is_on()) return false;
+
+  auto call = this->state_->make_call();
+  call.set_state(false);
+  call.set_transition_length(0);
+  call.set_save(false);
+  call.perform();
+  return true;
+}
+
+inline void GX53MixerLightOutput::apply_thermal_update_(ThermalInterlockUpdate update) {
+  switch (update) {
+    case ThermalInterlockUpdate::LOCKED:
+      ESP_LOGW(TAG, "Thermal lockout activated; forcing light off");
+      if (this->thermal_lockout_sensor_ != nullptr) this->thermal_lockout_sensor_->publish_state(true);
+      this->force_off_();
+      break;
+    case ThermalInterlockUpdate::UNLOCKED: {
+      ESP_LOGI(TAG, "Thermal lockout cleared; light may be turned on again");
+      if (this->thermal_lockout_sensor_ != nullptr) this->thermal_lockout_sensor_->publish_state(false);
+      const bool state_was_published = this->force_off_();
+      // Re-advertise OFF after rearming. Controllers such as homectl can then
+      // retry an expected ON state that was rejected during the lockout.
+      if (!state_was_published && this->state_ != nullptr) this->state_->publish_state();
+      break;
+    }
+    case ThermalInterlockUpdate::NONE:
+      break;
+  }
+}
+
+inline void GX53MixerLightOutput::handle_temperature_(float temperature) {
+  this->last_temperature_ = temperature;
+  this->has_temperature_sample_ = true;
+  const bool cooldown_was_started = this->thermal_interlock_.cooldown_started();
+  const auto update = this->thermal_interlock_.update(temperature, millis());
+
+  if (!cooldown_was_started && !std::isfinite(temperature)) {
+    ESP_LOGW(TAG, "Temperature reading is invalid; thermal lockout remains active");
+  } else if (!cooldown_was_started && temperature >= this->thermal_interlock_.shutdown_temperature()) {
+    ESP_LOGW(TAG, "Thermal shutdown at %.1f C", temperature);
+  }
+  this->apply_thermal_update_(update);
+}
+
 inline void GX53MixerLightOutput::setup() {
-  if (this->state_ == nullptr || mqtt::global_mqtt_client == nullptr) return;
+  if (this->state_ == nullptr) return;
+
+  if (this->thermal_lockout_sensor_ != nullptr) this->thermal_lockout_sensor_->publish_initial_state(true);
+  if (this->temperature_sensor_ != nullptr) {
+    this->temperature_sensor_->add_on_state_callback([this](float temperature) {
+      this->handle_temperature_(temperature);
+    });
+    if (this->temperature_sensor_->has_state()) this->handle_temperature_(this->temperature_sensor_->state);
+  }
+
+  if (mqtt::global_mqtt_client == nullptr) return;
 
   this->mqtt_command_topic_ = mqtt::global_mqtt_client->get_topic_prefix();
   this->mqtt_command_topic_ += "/light/";
@@ -270,6 +381,11 @@ inline void GX53MixerLightOutput::setup() {
 }
 
 inline void GX53MixerLightOutput::loop() {
+  if (this->has_temperature_sample_ && this->thermal_interlock_.is_locked()) {
+    this->apply_thermal_update_(this->thermal_interlock_.update(this->last_temperature_, millis()));
+  }
+  if (this->thermal_interlock_.is_locked()) this->force_off_();
+
   if (this->mqtt_command_intercepted_ || this->mqtt_command_topic_.empty() || mqtt::global_mqtt_client == nullptr ||
       !mqtt::global_mqtt_client->is_connected())
     return;
@@ -281,7 +397,7 @@ inline void GX53MixerLightOutput::loop() {
   mqtt::global_mqtt_client->unsubscribe(this->mqtt_command_topic_);
   mqtt::global_mqtt_client->subscribe_json(
       this->mqtt_command_topic_,
-      [this](const std::string&, JsonObject root) { handle_mqtt_light_command(*this->state_, root); });
+      [this](const std::string&, JsonObject root) { this->handle_mqtt_light_command_(root); });
   this->mqtt_command_intercepted_ = true;
 }
 
