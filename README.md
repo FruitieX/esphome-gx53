@@ -5,8 +5,8 @@ driver through ESPHome's compatible BP5758D component.
 
 ## Local configuration
 
-Copy `secrets.yaml.example` to `secrets.yaml` and set the local Wi-Fi,
-locked access-point BSSID, recovery-network and fallback-access-point values. The resulting `secrets.yaml` is ignored by Git.
+Copy `secrets.yaml.example` to `secrets.yaml` and set the local Wi-Fi and
+recovery-network values. The resulting `secrets.yaml` is ignored by Git.
 
 The checked-in configuration has safe development defaults for `node_name`
 and `friendly_name`. Override both substitutions for each physical bulb:
@@ -66,7 +66,6 @@ While the light is off, the bulb glows faintly to show connectivity problems:
 | Color | Meaning |
 | --- | --- |
 | Red | Not connected to Wi-Fi |
-| Magenta | Not connected; fallback access point (`<node_name>-fb`) is up |
 | Blue | Wi-Fi connected, MQTT broker not connected |
 | Dark | Connected, thermal lockout, or the firmware is not running |
 
@@ -88,6 +87,9 @@ nmcli dev wifi hotspot ifname wlp2s0 ssid gx53-recovery password "<recovery pass
 ```
 
 Without MQTT, ESPHome reboots the bulb after 15 minutes; it rejoins the
-recovery network right away. The fallback access point is a last resort: the
-bulb keeps leaving its channel to retry the main network, so it is hard to
-reach.
+recovery network right away.
+
+There is deliberately no fallback access point. On BK7231N it was barely
+reachable while the bulb retried the main network, and while it was up
+ESPHome stopped scanning (so the recovery network was never found) and
+skipped the 15-minute Wi-Fi reboot.

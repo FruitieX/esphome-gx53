@@ -11,38 +11,31 @@ bk72xx:
   board: generic-bk7231n-qfn32-tuya
 
 wifi:
-  # Pin the access point. UniFi's "lock to AP" rejects every other BSSID of
-  # the same SSID, but ESPHome connects to the strongest one it scans. Bulbs
-  # with a stronger non-locked AP in range kept retrying the rejected AP; once
-  # the fallback AP started, scanning stopped and they could stay offline for
-  # long periods.
+  # No pinned BSSID and no fallback AP, so the bulbs keep scanning. UniFi's
+  # "lock to AP" refuses every other BSSID of the SSID; ESPHome lowers the
+  # priority of a BSSID after two failed attempts and tries the next one on
+  # the following scan, so the bulb ends up on whichever AP it is locked to.
+  # A fallback AP stopped that scanning (blind retries only) and disabled the
+  # 15-minute reboot below, which left bulbs offline for long periods.
   networks:
     - ssid: !secret wifi_ssid
       password: !secret wifi_password
-      bssid: !secret wifi_bssid
       priority: 10
 
     # Recovery network that normally doesn't exist. If a bulb can't join the
     # main network, host this SSID (e.g. `nmcli dev wifi hotspot` on a nearby
-    # machine) and the bulb joins it as a client for OTA. More reliable than
-    # the fallback AP, which is barely reachable while the bulb keeps
-    # retrying the main network.
+    # machine); the bulb finds it on its next scan and joins as a client, so
+    # it can be updated over the air.
     - ssid: !secret recovery_wifi_ssid
       password: !secret recovery_wifi_password
       priority: 0
 
-  # Roaming picks the strongest same-SSID BSSID without checking the pinned
-  # one, so it would also try APs that UniFi rejects.
+  # Roaming moves to a stronger BSSID of the same SSID, which UniFi refuses
+  # for a locked client.
   post_connect_roaming: false
 
-  # Safety net in case normal Wi-Fi doesn't work.
-  ap:
-    # Keep this short enough for Wi-Fi's 32-byte SSID limit even when the
-    # friendly name is long.
-    ssid: "${node_name}-fb"
-    password: !secret fallback_ap_password
-
-captive_portal:
+  # Without Wi-Fi for this long, reboot and start over with a fresh scan.
+  reboot_timeout: 15min
 
 logger:
   baud_rate: 0
@@ -137,7 +130,7 @@ light:
       name: "Thermal Lockout"
 
     # While the light is off, glow faintly to show connectivity problems:
-    # red = no Wi-Fi, magenta = fallback AP up, blue = no MQTT broker. Shown
+    # red = no Wi-Fi, blue = no MQTT broker. Shown
     # at once until the first full connection after boot, then only after a
     # problem persists for status_indicator_delay.
     status_indicator: true
