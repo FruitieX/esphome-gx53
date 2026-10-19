@@ -30,6 +30,22 @@ Use `--no-logs` when provisioning several bulbs and a log tail is not needed:
   run gx53-test.yaml --device 192.168.13.75 --no-logs
 ```
 
+## Updating bulbs over the air
+
+The UF2 that ESPHome uploads also carries the serial-flasher images, which a
+bulb discards during OTA, so about 2.5 MB goes over the air. On bulbs with a
+weak signal that upload rarely completes. `tools/ota-upload.sh` compiles the
+firmware, rebuilds the UF2 with only the OTA part (about 1 MB, verified to
+match the official payload) and uploads that:
+
+```sh
+tools/ota-upload.sh gx53-01 "GX53 01" 192.168.13.75
+```
+
+If an upload fails, wait at least 90 seconds before retrying: the bulb keeps
+the stalled session open until its data timeout, and an earlier retry
+fails the handshake.
+
 ## Safety configuration
 
 The BP5758D `current` values and the mixer's corresponding `*_current_ma`
