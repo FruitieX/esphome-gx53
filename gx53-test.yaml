@@ -20,7 +20,11 @@ wifi:
   networks:
     - ssid: !secret wifi_ssid
       password: !secret wifi_password
-      priority: 10
+      # ESPHome starts every scanned BSSID at its network's priority and
+      # lowers it by one per failed round. Keep this exactly one above the
+      # recovery network: after one failed round a refused BSSID ties with
+      # the recovery network and the stronger signal wins.
+      priority: 1
 
     # Recovery network that normally doesn't exist. If a bulb can't join the
     # main network, host this SSID (e.g. `nmcli dev wifi hotspot` on a nearby
