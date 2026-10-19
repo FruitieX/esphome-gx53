@@ -12,10 +12,12 @@
 #include "esphome/components/mqtt/mqtt_client.h"
 #include "esphome/components/output/float_output.h"
 #include "esphome/components/sensor/sensor.h"
+#include "esphome/components/wifi/wifi_component.h"
 #include "esphome/core/component.h"
 #include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
 #include "gx53_mixer_math.h"
+#include "status_indicator.h"
 #include "thermal_interlock.h"
 
 namespace esphome::gx53_mixer {
@@ -51,6 +53,10 @@ class GX53MixerLightOutput final : public Component, public light::LightOutput {
   void set_thermal_cooldown_ms(uint32_t value) { this->thermal_interlock_.set_cooldown_ms(value); }
   void set_thermal_lockout_sensor(binary_sensor::BinarySensor* value) { this->thermal_lockout_sensor_ = value; }
 
+  void set_status_indicator(bool value) { this->status_indicator_ = value; }
+  void set_status_indicator_brightness(float value) { this->status_indicator_brightness_ = value; }
+  void set_status_indicator_delay_ms(uint32_t value) { this->status_filter_.set_delay_ms(value); }
+
   light::LightTraits get_traits() override {
     auto traits = light::LightTraits();
 
@@ -79,7 +85,8 @@ class GX53MixerLightOutput final : public Component, public light::LightOutput {
       this->write_channels_({});
       return;
     }
-    this->write_channels_(this->mix_values_(state->current_values));
+    const auto& values = state->current_values;
+    this->write_channels_(values.is_on() ? this->mix_values_(values) : this->status_levels_());
   }
 
  protected:
@@ -90,6 +97,37 @@ class GX53MixerLightOutput final : public Component, public light::LightOutput {
   bool force_off_();
   void handle_temperature_(float temperature);
   void apply_thermal_update_(ThermalInterlockUpdate update);
+  void update_status_indicator_();
+
+  // Faint glow for the shown connectivity problem; all channels off otherwise.
+  math::ChannelLevels status_levels_() const {
+    if (!this->status_indicator_) return {};
+    float red = 0.0f;
+    float blue = 0.0f;
+    switch (this->status_filter_.shown()) {
+      case StatusIndication::NONE:
+        return {};
+      case StatusIndication::NO_WIFI:
+        red = 1.0f;
+        break;
+      case StatusIndication::FALLBACK_AP:
+        red = 1.0f;
+        blue = 1.0f;
+        break;
+      case StatusIndication::NO_MQTT:
+        blue = 1.0f;
+        break;
+    }
+    light::LightColorValues values;
+    values.set_color_mode(light::ColorMode::RGB);
+    values.set_state(true);
+    values.set_brightness(this->status_indicator_brightness_);
+    values.set_color_brightness(1.0f);
+    values.set_red(red);
+    values.set_green(0.0f);
+    values.set_blue(blue);
+    return this->mix_values_(values);
+  }
 
   float gamma_correct_(float value) const {
     return this->state_ == nullptr ? math::clamp01(value) : this->state_->gamma_correct_lut(math::clamp01(value));
@@ -200,6 +238,10 @@ class GX53MixerLightOutput final : public Component, public light::LightOutput {
   ThermalInterlock thermal_interlock_{};
   float last_temperature_{NAN};
   bool has_temperature_sample_{false};
+
+  bool status_indicator_{true};
+  float status_indicator_brightness_{1.0f / 255.0f};
+  StatusIndicatorFilter status_filter_{};
 };
 
 class GX53MixerTransition final : public light::LightTransformer {
@@ -359,6 +401,26 @@ inline void GX53MixerLightOutput::handle_temperature_(float temperature) {
   this->apply_thermal_update_(update);
 }
 
+inline void GX53MixerLightOutput::update_status_indicator_() {
+  if (!this->status_indicator_ || this->state_ == nullptr) return;
+
+  auto* wifi = wifi::global_wifi_component;
+  const auto status = classify_status(wifi != nullptr && wifi->is_connected(), wifi != nullptr && wifi->is_ap_active(),
+                                      mqtt::global_mqtt_client != nullptr && mqtt::global_mqtt_client->is_connected());
+  if (this->status_filter_.update(status, millis())) {
+    ESP_LOGI(TAG, "Status indicator: %s", status_name(this->status_filter_.shown()));
+  }
+
+  // Never override a light the controller turned on, a running transition or
+  // the thermal interlock. write_state() renders the glow once the light is
+  // off; this only catches status changes while it already is.
+  if (this->thermal_interlock_.is_locked() || this->state_->current_values.is_on() ||
+      this->state_->is_transformer_active())
+    return;
+  const auto levels = this->limited_(this->status_levels_());
+  if (!math::nearly_equal(this->last_output_, levels)) this->write_channels_(levels);
+}
+
 inline void GX53MixerLightOutput::setup() {
   if (this->state_ == nullptr) return;
 
@@ -385,6 +447,7 @@ inline void GX53MixerLightOutput::loop() {
     this->apply_thermal_update_(this->thermal_interlock_.update(this->last_temperature_, millis()));
   }
   if (this->thermal_interlock_.is_locked()) this->force_off_();
+  this->update_status_indicator_();
 
   if (this->mqtt_command_intercepted_ || this->mqtt_command_topic_.empty() || mqtt::global_mqtt_client == nullptr ||
       !mqtt::global_mqtt_client->is_connected())

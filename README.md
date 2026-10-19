@@ -6,7 +6,7 @@ driver through ESPHome's compatible BP5758D component.
 ## Local configuration
 
 Copy `secrets.yaml.example` to `secrets.yaml` and set the local Wi-Fi,
-locked access-point BSSID and fallback-access-point values. The resulting `secrets.yaml` is ignored by Git.
+locked access-point BSSID, recovery-network and fallback-access-point values. The resulting `secrets.yaml` is ignored by Git.
 
 The checked-in configuration has safe development defaults for `node_name`
 and `friendly_name`. Override both substitutions for each physical bulb:
@@ -33,12 +33,45 @@ Use `--no-logs` when provisioning several bulbs and a log tail is not needed:
 ## Safety configuration
 
 The BP5758D `current` values and the mixer's corresponding `*_current_ma`
-values must always match. The current configuration uses 4 mA for each RGB
-channel, 6 mA for each white channel, and a 12 mA aggregate mixer budget.
+values must always match. The current configuration uses 6 mA for each RGB
+channel, 8 mA for each white channel, and a 14 mA aggregate mixer budget.
 
 The mixer also owns the chip-temperature interlock. It starts with the output
-locked until a safe temperature reading is available, shuts down at 80 °C,
+locked until a safe temperature reading is available, shuts down at 85 °C,
 and rejects turn-on commands for at least 60 seconds. It rearms only after the
-chip has cooled to 70 °C or below, then republishes the OFF state so a controller
+chip has cooled to 75 °C or below, then republishes the OFF state so a controller
 can retry its desired state safely. The diagnostic `Thermal Lockout` binary
 sensor reports whether commands are currently inhibited.
+
+## Status light
+
+While the light is off, the bulb glows faintly to show connectivity problems:
+
+| Color | Meaning |
+| --- | --- |
+| Red | Not connected to Wi-Fi |
+| Magenta | Not connected; fallback access point (`<node_name>-fb`) is up |
+| Blue | Wi-Fi connected, MQTT broker not connected |
+| Dark | Connected, thermal lockout, or the firmware is not running |
+
+Until the first full connection after boot, problems are shown immediately,
+so a normal boot may glow red and then blue for a few seconds. Afterwards a
+problem must last for `status_indicator_delay` (30 s) before it is shown.
+
+## Recovery
+
+A bulb that can't join the main network also tries the recovery network
+(`recovery_wifi_ssid`), which normally doesn't exist. Host it near the bulb
+and update the bulb over it:
+
+```sh
+nmcli dev wifi hotspot ifname wlp2s0 ssid gx53-recovery password "<recovery password>"
+# find the bulb's address among the hotspot's DHCP leases, then
+.venv/bin/esphome -s node_name <node> -s friendly_name "<name>" \
+  upload gx53-test.yaml --device <address>
+```
+
+Without MQTT, ESPHome reboots the bulb after 15 minutes; it rejoins the
+recovery network right away. The fallback access point is a last resort: the
+bulb keeps leaving its channel to retry the main network, so it is hard to
+reach.

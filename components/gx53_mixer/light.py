@@ -15,7 +15,7 @@ from esphome.const import (
 )
 from esphome.types import ConfigType
 
-DEPENDENCIES = ["mqtt", "sensor"]
+DEPENDENCIES = ["mqtt", "sensor", "wifi"]
 AUTO_LOAD = ["binary_sensor"]
 
 CONF_RGB_WHITE_COLOR_TEMPERATURE = "rgb_white_color_temperature"
@@ -32,6 +32,9 @@ CONF_THERMAL_SHUTDOWN_TEMPERATURE = "thermal_shutdown_temperature"
 CONF_THERMAL_RESET_TEMPERATURE = "thermal_reset_temperature"
 CONF_THERMAL_COOLDOWN = "thermal_cooldown"
 CONF_THERMAL_LOCKOUT = "thermal_lockout"
+CONF_STATUS_INDICATOR = "status_indicator"
+CONF_STATUS_INDICATOR_BRIGHTNESS = "status_indicator_brightness"
+CONF_STATUS_INDICATOR_DELAY = "status_indicator_delay"
 
 gx53_mixer_ns = cg.esphome_ns.namespace("gx53_mixer")
 GX53MixerLightOutput = gx53_mixer_ns.class_(
@@ -98,6 +101,15 @@ CONFIG_SCHEMA = cv.All(
                 device_class=DEVICE_CLASS_SAFETY,
                 entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
             ),
+            cv.Optional(CONF_STATUS_INDICATOR, default=True): cv.boolean,
+            # The lowest brightness step, which the minimum-brightness floor
+            # keeps just visible.
+            cv.Optional(
+                CONF_STATUS_INDICATOR_BRIGHTNESS, default=1.0 / 255.0
+            ): cv.percentage,
+            cv.Optional(
+                CONF_STATUS_INDICATOR_DELAY, default="30s"
+            ): cv.positive_time_period_milliseconds,
         }
     ).extend(cv.COMPONENT_SCHEMA),
     light.validate_color_temperature_channels,
@@ -156,3 +168,13 @@ async def to_code(config: ConfigType) -> None:
             config[CONF_THERMAL_LOCKOUT]
         )
         cg.add(var.set_thermal_lockout_sensor(thermal_lockout))
+
+    cg.add(var.set_status_indicator(config[CONF_STATUS_INDICATOR]))
+    cg.add(
+        var.set_status_indicator_brightness(config[CONF_STATUS_INDICATOR_BRIGHTNESS])
+    )
+    cg.add(
+        var.set_status_indicator_delay_ms(
+            config[CONF_STATUS_INDICATOR_DELAY].total_milliseconds
+        )
+    )
