@@ -76,18 +76,31 @@ problem must last for `status_indicator_delay` (30 s) before it is shown.
 ## Recovery
 
 A bulb that can't join the main network also tries the recovery network
-(`recovery_wifi_ssid`), which normally doesn't exist. Host it near the bulb
-and update the bulb over it:
+(`recovery_wifi_ssid`), which normally doesn't exist. The password is in
+1Password (Agents vault, "GX53 recovery Wi-Fi"). Host it near the bulb and
+update the bulb over it:
 
 ```sh
-nmcli dev wifi hotspot ifname wlp2s0 ssid gx53-recovery password "<recovery password>"
-# find the bulb's address among the hotspot's DHCP leases, then
-.venv/bin/esphome -s node_name <node> -s friendly_name "<name>" \
-  upload gx53-test.yaml --device <address>
+nmcli dev wifi hotspot ifname wlp2s0 con-name gx53-recovery \
+  ssid gx53-recovery band bg channel 11 password "<recovery password>"
+# the bulb's address appears here once it has joined; its client MAC is
+# one lower than the MAC of its old `-fb` access point
+cat /var/lib/NetworkManager/dnsmasq-wlp2s0.leases
+tools/ota-upload.sh <node> "<name>" <address>
+nmcli connection delete gx53-recovery
 ```
 
-Without MQTT, ESPHome reboots the bulb after 15 minutes; it rejoins the
-recovery network right away.
+The host's firewall must accept DHCP (UDP 67) on the hotspot interface.
+Otherwise the bulb associates, gets no address and drops the connection
+every minute or two. On a NixOS host with the firewall enabled, that means
+`networking.firewall.interfaces.<iface>.allowedUDPPorts = [ 67 ]` or a
+temporary `iptables -I nixos-fw 1 -i <iface> -p udp --dport 67 -j
+nixos-fw-accept`. A phone hotspot handles DHCP itself.
+
+A blocked bulb found and joined the recovery network within about 25
+minutes in testing. Updates over a nearby hotspot take about 10 seconds
+instead of several minutes. Without MQTT, ESPHome reboots the bulb after
+15 minutes; it rejoins the recovery network right away.
 
 There is deliberately no fallback access point. On BK7231N it was barely
 reachable while the bulb retried the main network, and while it was up
