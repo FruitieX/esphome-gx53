@@ -5,8 +5,8 @@ driver through ESPHome's compatible BP5758D component.
 
 ## Local configuration
 
-Copy `secrets.yaml.example` to `secrets.yaml` and set the local Wi-Fi and
-fallback-access-point values. The resulting `secrets.yaml` is ignored by Git.
+Copy `secrets.yaml.example` to `secrets.yaml` and set the local Wi-Fi,
+locked access-point BSSID and fallback-access-point values. The resulting `secrets.yaml` is ignored by Git.
 
 The checked-in configuration has safe development defaults for `node_name`
 and `friendly_name`. Override both substitutions for each physical bulb:

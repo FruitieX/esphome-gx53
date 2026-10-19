@@ -11,8 +11,19 @@ bk72xx:
   board: generic-bk7231n-qfn32-tuya
 
 wifi:
-  ssid: !secret wifi_ssid
-  password: !secret wifi_password
+  # Pin the access point. UniFi's "lock to AP" rejects every other BSSID of
+  # the same SSID, but ESPHome connects to the strongest one it scans. Bulbs
+  # with a stronger non-locked AP in range kept retrying the rejected AP; once
+  # the fallback AP started, scanning stopped and they could stay offline for
+  # long periods.
+  networks:
+    - ssid: !secret wifi_ssid
+      password: !secret wifi_password
+      bssid: !secret wifi_bssid
+
+  # Roaming picks the strongest same-SSID BSSID without checking the pinned
+  # one, so it would also try APs that UniFi rejects.
+  post_connect_roaming: false
 
   # Safety net in case normal Wi-Fi doesn't work.
   ap:
