@@ -3,6 +3,7 @@
 # You can modify this file to suit your needs.
 /.esphome/
 /secrets.yaml
+/.venv/
 /lights.md
 __pycache__/
 *.py[cod]
