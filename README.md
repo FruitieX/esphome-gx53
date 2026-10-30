@@ -5,8 +5,9 @@ driver through ESPHome's compatible BP5758D component.
 
 ## Local configuration
 
-Copy `secrets.yaml.example` to `secrets.yaml` and set the local Wi-Fi and
-recovery-network values. The resulting `secrets.yaml` is ignored by Git.
+Copy `secrets.yaml.example` to `secrets.yaml` and set the local Wi-Fi,
+recovery-network and MQTT broker account values. The resulting
+`secrets.yaml` is ignored by Git.
 
 The checked-in configuration has safe development defaults for `node_name`
 and `friendly_name`. Override both substitutions for each physical bulb:
@@ -45,6 +46,11 @@ tools/ota-upload.sh gx53-01 "GX53 01" 192.168.13.75
 If an upload fails, wait at least 90 seconds before retrying: the bulb keeps
 the stalled session open until its data timeout, and an earlier retry
 fails the handshake.
+
+Bulbs sharing an access point upload slowly in parallel (minutes instead of
+about 15 seconds) and may time out, so update weak-signal bulbs one at a
+time. After an update a bulb can take several minutes to rejoin Wi-Fi
+before it reports online again.
 
 ## Safety configuration
 
