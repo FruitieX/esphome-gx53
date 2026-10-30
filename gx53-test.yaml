@@ -61,6 +61,8 @@ external_components:
 
 mqtt:
   broker: mqtt.fruitiex.org
+  username: !secret mqtt_username
+  password: !secret mqtt_password
   topic_prefix: esphome/${node_name}
   discovery: true
 
